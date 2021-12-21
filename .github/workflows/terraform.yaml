@@ -42,17 +42,18 @@ jobs:
         run: terraform fmt -check -recursive
         continue-on-error: true
 
-      - name: Terraform Init (prod)
-        id: init-staging
-        working-directory: infra/terraform/envs/prod
-        run: |
-          terraform init -upgrade
-
       - name: Terraform Init (staging)
         id: init-staging
         working-directory: infra/terraform/envs/staging
         run: |
           terraform init -upgrade
+          
+      - name: Terraform Init (prod)
+        id: init-prod
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform init -upgrade
+
 
       - name: Terraform Validate (staging)
         id: validate-staging
