@@ -1,0 +1,176 @@
+name: Terraform
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  TF_IN_AUTOMATION: true
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Terraform Setup
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Terraform Format (staging)
+        id: fmt-staging
+        working-directory: infra/terraform/envs/prod
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      
+      - name: Terraform Format (prod)
+        id: fmt-prod
+        working-directory: infra/terraform/envs/prod
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init (prod)
+        id: init-staging
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform init -upgrade
+
+      - name: Terraform Init (staging)
+        id: init-staging
+        working-directory: infra/terraform/envs/staging
+        run: |
+          terraform init -upgrade
+
+      - name: Terraform Validate (staging)
+        id: validate-staging
+        working-directory: infra/terraform/envs/staging
+        run: terraform validate -no-color
+
+      - name: Terraform Plan (staging)
+        id: plan-staging
+        working-directory: infra/terraform/envs/staging
+        run: |
+          terraform plan -no-color
+
+      - name: Terraform Validate (prod)
+        id: validate-prod
+        working-directory: infra/terraform/envs/prod
+        run: terraform validate -no-color
+
+      - name: Terraform Plan (prod)
+        id: plan-prod
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform plan -no-color
+
+      - name: Outputs
+        uses: actions/github-script@v4
+        env:
+          PLAN_STAGING: "terraform\n${{ steps.plan-staging.outputs.stdout }}"
+          PLAN_PROD: "terraform\n${{ steps.plan-prod.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style (staging) 🖌\`${{ steps.fmt-staging.outcome }}\`
+            #### Terraform Format and Style (prod) 🖌\`${{ steps.fmt-prod.outcome }}\`
+            #### Terraform Initialization (staging) ⚙️\`${{ steps.init-staging.outcome }}\`
+            #### Terraform Initialization (prod) ⚙️\`${{ steps.init-prod.outcome }}\`
+            #### Terraform Validation (staging) 🤖\`${{ steps.validate-staging.outcome }}\`
+            #### Terraform Validation (prod) 🤖\`${{ steps.validate-prod.outcome }}\`
+            #### Terraform Plan (staging) 📖\`${{ steps.plan-staging.outcome }}\`
+            #### Terraform Plan (prod) 📖\`${{ steps.plan-prod.outcome }}\`
+
+            <details><summary>Show Plan (staging)</summary>
+
+            \`\`\`terraform\n
+            ${process.env.PLAN_STAGING}
+            \`\`\`
+
+            </details>
+
+            <details><summary>Show Plan (prod)</summary>
+
+            \`\`\`terraform\n
+            ${process.env.PLAN_PROD}
+            \`\`\`
+
+            </details>
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  terraform-apply-staging:
+    name: Terraform Apply (staging)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout with Submodules
+        uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Terraform Setup
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Terraform Init
+        working-directory: infra/terraform/envs/staging
+        run: |
+          terraform init -upgrade
+
+      - name: Terraform Apply
+        working-directory: infra/terraform/envs/staging
+        run: |
+          terraform workspace select staging
+          terraform apply -auto-approve
+
+  terraform-apply-prod:
+    name: Terraform Apply (prod)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: terraform-apply-staging
+    runs-on: ubuntu-latest
+
+    environment:
+      name: prod
+
+    steps:
+      - name: Checkout with Submodules
+        uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Terraform Setup
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Terraform Init
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform init -upgrade
+
+      - name: Terraform Apply
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform workspace select prod
+          terraform apply -auto-approve
